@@ -1,13 +1,34 @@
 [package]
 name = "ffi"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[features]
+default = ["napi"]
+napi = ["dep:napi", "dep:napi-derive"]
+uniffi = ["dep:uniffi"]
+c-ffi = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-napi = { version = "2", features = ["napi4"] }
-napi-derive = "2"
+
+# NAPI-RS (Node.js bindings) - pinned for Rust 1.86 compatibility with syn 2
+napi = { version = "=2.16.0", features = ["napi4"], optional = true }
+napi-derive = { version = "=2.16.0", optional = true }
+
+# UniFFI (Python bindings)
+uniffi = { version = "0.28", optional = true }
+
+[build-dependencies]
+# NAPI-RS build - pinned for Rust 1.86 compatibility
+napi-build = "=2.2.0"
+
+# UniFFI build (optional)
+uniffi = { version = "0.28", features = ["build"], optional = true }
+
+[dev-dependencies]
+# For testing

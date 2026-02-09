@@ -11,7 +11,15 @@
   "scripts": {
     "build": "npx napi build --release",
     "build:debug": "npx napi build",
-    "test": "node test.js"
+    "test": "node tests/test_node.js",
+    "test:all": "npm run test && cargo test && npm run test:python",
+    "test:python": "python tests/test_python.py",
+    "test:haskell": "export LDFLAGS=\"-L/opt/homebrew/opt/libffi/lib\" && export CPPFLAGS=\"-I/opt/homebrew/opt/libffi/include\" && cd tests/test_haskell && cabal clean && cabal run",
+    "build:python": "cargo build --release --features uniffi && uniffi-bindgen generate src/ffi.udl --language python --out-dir bindings/python",
+    "build:haskell": "cargo build --release --features c-ffi && cbindgen --config cbindgen.toml --crate ffi --output bindings/headers/connector_service.h",
+    "rust:test": "cargo test",
+    "rust:build": "cargo build",
+    "rust:build:release": "cargo build --release"
   },
   "devDependencies": {
     "@napi-rs/cli": "^2.18.3"

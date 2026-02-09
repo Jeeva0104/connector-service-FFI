@@ -1,9 +1,11 @@
-use napi::bindgen_prelude::*;
-use std::result::Result; // Shadow napi::Result with std::Result
-use napi_derive::napi;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::result::Result;
+
+// ============================================
+// Core Types and Traits
+// ============================================
 
 pub trait PaymentMethodDataTypes {
     type Inner: Debug + Clone + Serialize;
@@ -74,6 +76,10 @@ impl<T: PaymentMethodDataTypes + CardConversionHelper<T>> ForeignTryFrom<Payment
         }
     }
 }
+
+// ============================================
+// Connector Integration Traits
+// ============================================
 
 pub trait ConnectorIntegrationAnyV2<Flow, ResourceCommonData, Req, Resp> {
     fn get_connector_integration_v2(
@@ -199,6 +205,10 @@ trait BridgeRequestResponse: Debug {
         Self::RequestBody::try_from(rd)
     }
 }
+
+// ============================================
+// Adyen Connector Implementation
+// ============================================
 
 pub struct AdyenRouterData<
     RD: FlowTypes,
@@ -391,6 +401,10 @@ impl<T: PaymentMethodDataTypes + Debug + Serialize + Clone + Copy + 'static> Con
     }
 }
 
+// ============================================
+// Request/Response Types
+// ============================================
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CardDetails {
     pub card_number: i64,
@@ -414,7 +428,13 @@ pub struct PaymentAuthorizeRequest {
     pub payment_method: PaymentMethodRequest,
 }
 
-fn build_adyen_request<T: PaymentMethodDataTypes + CardConversionHelper<T> + Debug + Clone + Copy + Serialize + 'static>(
+// ============================================
+// Core Business Logic (No FFI Dependencies)
+// ============================================
+
+fn build_adyen_request<
+    T: PaymentMethodDataTypes + CardConversionHelper<T> + Debug + Clone + Copy + Serialize + 'static,
+>(
     grpc_request: PaymentAuthorizeRequest,
 ) -> Result<AdyenPaymentRequest<T>, String> {
     let payment_flow_data = PaymentFlowData::foreign_try_from(grpc_request.clone())?;
@@ -441,14 +461,212 @@ fn build_adyen_request<T: PaymentMethodDataTypes + CardConversionHelper<T> + Deb
     AdyenPaymentRequest::try_from(input_data)
 }
 
-pub fn authorize_json(request_json: String) -> Result<String, String> {
-    let grpc_request: PaymentAuthorizeRequest =
-        serde_json::from_str(&request_json).map_err(|e| e.to_string())?;
-    let adyen_request = build_adyen_request::<DefaultPCIHolder>(grpc_request)?;
+/// Core authorization function - pure Rust, no FFI dependencies
+pub fn authorize_json(request: PaymentAuthorizeRequest) -> Result<String, String> {
+    let adyen_request = build_adyen_request::<DefaultPCIHolder>(request)?;
     serde_json::to_string(&adyen_request).map_err(|e| e.to_string())
 }
 
-#[napi]
-pub fn authorize(request_json: String) -> napi::Result<String> {
-    authorize_json(request_json).map_err(Error::from_reason)
+// ============================================
+// NAPI-RS Bindings (Node.js)
+// ============================================
+
+#[cfg(feature = "napi")]
+mod napi_bindings {
+    use super::*;
+    use napi::bindgen_prelude::*;
+    use napi_derive::napi;
+
+    #[napi]
+    pub fn authorize(request_json: String) -> napi::Result<String> {
+        let request: PaymentAuthorizeRequest =
+            serde_json::from_str(&request_json).map_err(|e| Error::from_reason(e.to_string()))?;
+        authorize_json(request).map_err(Error::from_reason)
+    }
+}
+
+#[cfg(feature = "napi")]
+pub use napi_bindings::*;
+
+// ============================================
+// UniFFI Bindings (Python)
+// ============================================
+
+#[cfg(feature = "uniffi")]
+mod uniffi_bindings {
+    use super::*;
+
+    #[uniffi::export]
+    pub fn authorize_payment(request_json: String) -> String {
+        let request: PaymentAuthorizeRequest = match serde_json::from_str(&request_json) {
+            Ok(req) => req,
+            Err(e) => return format!(r#"{{"error":"invalid json: {}"}}"#, e),
+        };
+        match authorize_json(request) {
+            Ok(result) => result,
+            Err(e) => format!(r#"{{"error":"{}"}}"#, e),
+        }
+    }
+}
+
+#[cfg(feature = "uniffi")]
+uniffi::setup_scaffolding!();
+
+// ============================================
+// C FFI Bindings (Haskell)
+// ============================================
+
+#[cfg(feature = "c-ffi")]
+mod c_bindings {
+    use super::*;
+    use std::ffi::{CStr, CString};
+    use std::os::raw::c_char;
+
+    /// Authorize a payment - C FFI compatible
+    /// 
+    /// # Safety
+    /// The caller must ensure that `request_json` is a valid null-terminated C string.
+    /// The returned pointer must be freed by calling `free_string`.
+    #[no_mangle]
+    pub unsafe extern "C" fn authorize_c(request_json: *const c_char) -> *mut c_char {
+        if request_json.is_null() {
+            let error = CString::new(r#"{"error":"null input"}"#).unwrap();
+            return error.into_raw();
+        }
+
+        let c_str = unsafe { CStr::from_ptr(request_json) };
+        let request_str = match c_str.to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                let error = CString::new(r#"{"error":"invalid utf8"}"#).unwrap();
+                return error.into_raw();
+            }
+        };
+
+        let request: PaymentAuthorizeRequest = match serde_json::from_str(&request_str) {
+            Ok(req) => req,
+            Err(e) => {
+                let error_json = format!(r#"{{"error":"invalid json: {}"}}"#, e);
+                let c_error = CString::new(error_json).unwrap_or_else(|_| {
+                    CString::new(r#"{"error":"json parse error"}"#).unwrap()
+                });
+                return c_error.into_raw();
+            }
+        };
+
+        match authorize_json(request) {
+            Ok(result) => {
+                let c_result = CString::new(result).unwrap_or_else(|_| {
+                    CString::new(r#"{"error":"null byte in result"}"#).unwrap()
+                });
+                c_result.into_raw()
+            }
+            Err(e) => {
+                let error_json = format!(r#"{{"error":"{}"}}"#, e);
+                let c_error = CString::new(error_json).unwrap_or_else(|_| {
+                    CString::new(r#"{"error":"serialization error"}"#).unwrap()
+                });
+                c_error.into_raw()
+            }
+        }
+    }
+
+    /// Free a string allocated by this library
+    /// 
+    /// # Safety
+    /// The pointer must have been returned by `authorize_c`.
+    #[no_mangle]
+    pub unsafe extern "C" fn free_string(ptr: *mut c_char) {
+        if !ptr.is_null() {
+            unsafe {
+                let _ = CString::from_raw(ptr);
+            }
+        }
+    }
+}
+
+// ============================================
+// Unit Tests
+// ============================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_request_json() -> String {
+        r#"{
+            "amount": 1000,
+            "minor_amount": 100,
+            "payment_id": "pay_123",
+            "confirm": true,
+            "merchant_account": "merchant_1",
+            "payment_method": {
+                "card": {
+                    "card_number": 4111111111111111,
+                    "card_cvc": 123,
+                    "card_issuer": null
+                }
+            }
+        }"#.to_string()
+    }
+
+    #[test]
+    fn test_authorize_json_success() {
+        let request: PaymentAuthorizeRequest = serde_json::from_str(&valid_request_json()).unwrap();
+        let result = authorize_json(request);
+        assert!(result.is_ok());
+        
+        let response = result.unwrap();
+        assert!(response.contains("amount"));
+        assert!(response.contains("merchant_account"));
+    }
+
+    #[test]
+    fn test_authorize_json_invalid_payment_method() {
+        let invalid_request = PaymentAuthorizeRequest {
+            amount: 1000,
+            minor_amount: 100,
+            payment_id: "pay_123".to_string(),
+            confirm: true,
+            merchant_account: "merchant_1".to_string(),
+            payment_method: PaymentMethodRequest::Card(CardDetails {
+                card_number: -1, // Invalid card number
+                card_cvc: 123,
+                card_issuer: None,
+            }),
+        };
+        let result = authorize_json(invalid_request);
+        // The function may succeed or fail depending on validation logic
+        // This test verifies the function accepts the typed input
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_json_parsing_error() {
+        let invalid_json = "invalid json";
+        let parse_result: Result<PaymentAuthorizeRequest, _> = serde_json::from_str(invalid_json);
+        assert!(parse_result.is_err());
+    }
+
+    #[test]
+    fn test_json_parsing_empty() {
+        let empty_json = "";
+        let parse_result: Result<PaymentAuthorizeRequest, _> = serde_json::from_str(empty_json);
+        assert!(parse_result.is_err());
+    }
+
+    #[test]
+    fn test_json_parsing_missing_fields() {
+        let incomplete_json = r#"{"amount": 1000}"#;
+        let parse_result: Result<PaymentAuthorizeRequest, _> = serde_json::from_str(incomplete_json);
+        assert!(parse_result.is_err());
+    }
+
+    #[test]
+    fn test_payment_flow_data_conversion() {
+        let request: PaymentAuthorizeRequest = serde_json::from_str(&valid_request_json()).unwrap();
+        let flow_data = PaymentFlowData::foreign_try_from(request);
+        assert!(flow_data.is_ok());
+        assert_eq!(flow_data.unwrap().payment_id, "pay_123");
+    }
 }

@@ -1,0 +1,37 @@
+cabal-version:      3.0
+name:               connector-ffi-test
+version:            0.1.0.0
+synopsis:           Haskell FFI tests for connector-service-FFI
+description:        Tests for the connector-service-FFI Rust library via C FFI bindings
+license:            MIT
+author:             Test Suite
+maintainer:         test@example.com
+build-type:         Simple
+
+common warnings
+    ghc-options: -Wall
+
+executable connector-ffi-test
+    import:           warnings
+    main-is:          Main.hs
+    build-depends:
+        base >=4.17.0.0 && <5
+    hs-source-dirs:   .
+    default-language: GHC2021
+
+    ghc-options:
+        -O2
+        -dynamic
+        -optl-L/opt/homebrew/opt/libffi/lib
+        -optl-lffi
+
+    extra-lib-dirs:
+        ../../target/release
+
+    extra-libraries:
+        ffi
+
+    if os(darwin)
+        frameworks:
+            CoreFoundation
+
