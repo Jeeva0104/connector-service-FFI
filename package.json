@@ -1,0 +1,19 @@
+{
+  "name": "ffi-addon",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "index.node",
+    "dist"
+  ],
+  "scripts": {
+    "build": "npx napi build --release",
+    "build:debug": "npx napi build",
+    "test": "node test.js"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.3"
+  }
+}

@@ -1,0 +1,21 @@
+# Rust
+target/
+
+# Node.js
+node_modules/
+*.node
+
+# IDE/Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
